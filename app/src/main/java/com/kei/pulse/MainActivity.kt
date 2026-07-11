@@ -197,6 +197,9 @@ class MainActivity : ComponentActivity() {
                             onPerAppSwitchNoticesChange = viewModel::setPerAppSwitchNotices,
                             perAppSwitchNoticeDetails = perAppSwitchNoticeDetails,
                             onPerAppSwitchNoticeDetailsChange = viewModel::setPerAppSwitchNoticeDetails,
+                            onPreviewPerAppNotification = {
+                                ForegroundAppMonitorService.previewNotification(this@MainActivity)
+                            },
                             overlayEnabled = settings.overlayEnabled,
                             overlayPreset = settings.overlayPreset,
                             overlayElements = settings.overlayElements,

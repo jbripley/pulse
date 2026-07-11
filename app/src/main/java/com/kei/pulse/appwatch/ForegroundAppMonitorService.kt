@@ -586,6 +586,16 @@ class ForegroundAppMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_PREVIEW_NOTIFICATION) {
+            val watcherWasRunning = pollJob?.isActive == true
+            serviceScope.launch {
+                showNotificationPreview()
+                // Starting solely for a preview must not leave the foreground watcher running. The separate
+                // preview notification has its own short timeout and survives this service instance stopping.
+                if (!watcherWasRunning) stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_TOGGLE_OVERLAY_LOCK) {
             serviceScope.launch {
                 overlayLocked = !overlayLocked
@@ -1980,6 +1990,31 @@ class ForegroundAppMonitorService : Service() {
         packageManager.getApplicationIcon(packageName).toBitmap(width = 96, height = 96)
     }.getOrNull()
 
+    private suspend fun showNotificationPreview() {
+        val settings = container.settingsStorage.settings.first()
+        val includeOverrides = container.perAppConfigStorage.switchNoticeDetails.first()
+        val preview = PerAppConfig(
+            packageName = packageName,
+            appLabel = "Notification preview",
+            profileBinding = PerAppConfig.AUTO_BINDING,
+            fpsTarget = if (settings.autoTdpFpsTarget == 30) 60 else 30,
+            aggressivePark = !settings.autoTdpAggressivePark,
+            bias = AutoTdpBias.entries.first { it != settings.autoTdpBias },
+        )
+        val notice = AutoTdpNotice.text(preview.appLabel, preview, settings, includeOverrides)
+        val notification = buildNotification(
+            contentText = styledAutoTdpText(notice.compact, settings.accentColor),
+            expandedText = notice.expanded.takeIf { includeOverrides }
+                ?.let { styledAutoTdpText(it, settings.accentColor) },
+            accentColor = settings.accentColor,
+            largeIcon = loadAppIcon(packageName),
+            title = "PULSE notification preview",
+            ongoing = false,
+            includeMoveAction = false,
+        )
+        getSystemService<NotificationManager>()?.notify(PREVIEW_NOTIFICATION_ID, notification)
+    }
+
     /** Accent values and punctuation while leaving keys in Android's contrast-safe notification color. */
     private fun styledAutoTdpText(text: String, accentColor: Int): CharSequence {
         val styled = SpannableString(text)
@@ -2051,10 +2086,13 @@ class ForegroundAppMonitorService : Service() {
         expandedText: CharSequence? = null,
         accentColor: Int? = null,
         largeIcon: Bitmap? = null,
+        title: String = "PULSE per-app profiles",
+        ongoing: Boolean = true,
+        includeMoveAction: Boolean = true,
     ): android.app.Notification {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile_underclock)
-            .setContentTitle("PULSE per-app profiles")
+            .setContentTitle(title)
             .setContentText(contentText)
             .apply {
                 accentColor?.let(::setColor)
@@ -2063,7 +2101,8 @@ class ForegroundAppMonitorService : Service() {
                     setStyle(NotificationCompat.BigTextStyle().bigText(it))
                 }
             }
-            .setOngoing(true)
+            .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(
@@ -2074,27 +2113,32 @@ class ForegroundAppMonitorService : Service() {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                 ),
             )
-        // In-game entry point to (un)lock the overlay for repositioning — works from the
-        // notification shade, which is reachable over full-screen games.
-        builder.addAction(
-            NotificationCompat.Action.Builder(
-                R.drawable.ic_tile_underclock,
-                "Move overlay",
-                PendingIntent.getService(
-                    this,
-                    1,
-                    Intent(this, ForegroundAppMonitorService::class.java)
-                        .setAction(ACTION_TOGGLE_OVERLAY_LOCK),
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                ),
-            ).build(),
-        )
+        if (!ongoing) builder.setTimeoutAfter(PREVIEW_TIMEOUT_MS)
+        if (includeMoveAction) {
+            // In-game entry point to (un)lock the overlay for repositioning — works from the
+            // notification shade, which is reachable over full-screen games.
+            builder.addAction(
+                NotificationCompat.Action.Builder(
+                    R.drawable.ic_tile_underclock,
+                    "Move overlay",
+                    PendingIntent.getService(
+                        this,
+                        1,
+                        Intent(this, ForegroundAppMonitorService::class.java)
+                            .setAction(ACTION_TOGGLE_OVERLAY_LOCK),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    ),
+                ).build(),
+            )
+        }
         return builder.build()
     }
 
     companion object {
         private const val CHANNEL_ID = "per_app_profile_monitoring"
         private const val NOTIFICATION_ID = 32
+        private const val PREVIEW_NOTIFICATION_ID = 33
+        private const val PREVIEW_TIMEOUT_MS = 10_000L
         // Diagnostic AutoTDP logging (adb logcat -s PulseAutoTdp) — on while verifying on-device.
         private const val AUTO_DEBUG = true
         private const val POLL_INTERVAL_MS = 1_000L
@@ -2106,6 +2150,7 @@ class ForegroundAppMonitorService : Service() {
         // the average; real play (CPU/GPU load ~15-50%) clears it easily.
         private const val MIN_ACTIVE_LOAD_PERCENT = 12
         const val ACTION_TOGGLE_OVERLAY_LOCK = "com.kei.pulse.action.TOGGLE_OVERLAY_LOCK"
+        private const val ACTION_PREVIEW_NOTIFICATION = "com.kei.pulse.action.PREVIEW_PER_APP_NOTIFICATION"
 
         /**
          * True while PULSE's own UI is on screen (set by MainActivity onResume/onPause). The OSD must never draw
@@ -2130,6 +2175,14 @@ class ForegroundAppMonitorService : Service() {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, ForegroundAppMonitorService::class.java),
+            )
+        }
+
+        fun previewNotification(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, ForegroundAppMonitorService::class.java)
+                    .setAction(ACTION_PREVIEW_NOTIFICATION),
             )
         }
 

@@ -114,6 +114,7 @@ fun SettingsScreen(
     onPerAppSwitchNoticesChange: (Boolean) -> Unit = {},
     perAppSwitchNoticeDetails: Boolean = true,
     onPerAppSwitchNoticeDetailsChange: (Boolean) -> Unit = {},
+    onPreviewPerAppNotification: () -> Unit = {},
     overlayEnabled: Boolean = false,
     overlayPreset: OverlayPreset = OverlayPreset.COMPACT,
     overlayElements: Set<OverlayElement> = OverlayPreset.COMPACT.elements,
@@ -387,11 +388,19 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                Switch(
-                    checked = perAppSwitchNoticeDetails,
-                    onCheckedChange = onPerAppSwitchNoticeDetailsChange,
-                    enabled = perAppSwitchNotices,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = onPreviewPerAppNotification,
+                        enabled = perAppSwitchNotices,
+                    ) {
+                        Text("Preview")
+                    }
+                    Switch(
+                        checked = perAppSwitchNoticeDetails,
+                        onCheckedChange = onPerAppSwitchNoticeDetailsChange,
+                        enabled = perAppSwitchNotices,
+                    )
+                }
             }
         }
 
